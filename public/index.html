@@ -8,6 +8,7 @@
 <body>
     <h1>🎲 Кости и Линии</h1>
 
+    <!-- ЛОББИ -->
     <div id="lobbyScreen">
         <h2>Лобби</h2>
         <div>
@@ -18,8 +19,21 @@
         <ul id="lobbyList"></ul>
         <button id="startGameButton" style="display:none;">🚀 Начать игру</button>
         <p id="lobbyMessage"></p>
+
+        <!-- Таблица лидеров -->
+        <h3>🏆 Таблица лидеров</h3>
+        <table id="leaderboardTable">
+            <thead>
+                <tr>
+                    <th>Игрок</th>
+                    <th>Победы</th>
+                </tr>
+            </thead>
+            <tbody id="leaderboardBody"></tbody>
+        </table>
     </div>
 
+    <!-- ИГРА -->
     <div id="gameScreen" style="display:none;">
         <div id="playersPanel"></div>
         <div class="dice-area">
@@ -29,7 +43,11 @@
         </div>
         <div id="message"></div>
         <div id="board" class="board"></div>
-        <button id="leaveButton">Выйти из игры</button>
+        <div id="gameOverButtons" style="display:none;">
+            <button id="playAgainButton">🔄 Играть ещё (с теми же)</button>
+            <button id="returnToLobbyButton">🏠 Вернуться в лобби</button>
+        </div>
+        <button id="leaveButton">🚪 Выйти из игры</button>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
