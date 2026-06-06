@@ -11,15 +11,27 @@ app.use(express.static('public'));
 const games = {};
 const playersInLobby = [];
 
+// Таблица лидеров (счётчик побед) — храним по id игрока
+const leaderboard = {};
+
 io.on('connection', (socket) => {
     console.log('Игрок подключился:', socket.id);
 
+    // Присоединение к лобби
     socket.on('joinLobby', (nickname) => {
         socket.nickname = nickname;
         playersInLobby.push({ id: socket.id, nickname: nickname });
+
+        // Добавляем в таблицу лидеров, если ещё нет
+        if (!leaderboard[socket.id]) {
+            leaderboard[socket.id] = { nickname: nickname, wins: 0 };
+        }
+
         io.emit('lobbyUpdate', playersInLobby);
+        io.emit('leaderboardUpdate', getLeaderboardData());
     });
 
+    // Начало игры
     socket.on('startGame', () => {
         if (playersInLobby.length < 2) {
             socket.emit('error', 'Минимум 2 игрока');
@@ -52,6 +64,7 @@ io.on('connection', (socket) => {
             }
         });
 
+        // Очищаем лобби, но запоминаем состав для рестарта
         playersInLobby.length = 0;
 
         io.to(roomId).emit('gameStarted', {
@@ -63,6 +76,37 @@ io.on('connection', (socket) => {
         io.emit('lobbyUpdate', playersInLobby);
     });
 
+    // Рестарт игры с теми же игроками
+    socket.on('restartGame', () => {
+        const roomId = socket.roomId;
+        const oldGame = games[roomId];
+        if (!oldGame) return;
+
+        const gamePlayers = oldGame.players;
+
+        const board = {};
+        for (let r = 1; r <= 6; r++) {
+            for (let c = 1; c <= 6; c++) {
+                board[r * 10 + c] = null;
+            }
+        }
+
+        games[roomId] = {
+            players: gamePlayers,
+            board: board,
+            currentPlayerIndex: 0,
+            diceValues: null,
+            gameOver: false
+        };
+
+        io.to(roomId).emit('gameStarted', {
+            players: gamePlayers,
+            board: board,
+            currentPlayerIndex: 0
+        });
+    });
+
+    // Бросок кубиков
     socket.on('rollDice', () => {
         const roomId = socket.roomId;
         const game = games[roomId];
@@ -76,12 +120,7 @@ io.on('connection', (socket) => {
         const d2 = Math.floor(Math.random() * 6) + 1;
         game.diceValues = { dice1: d1, dice2: d2, isDouble: d1 === d2 };
 
-        const move1 = d1 * 10 + d2;
-        const move2 = d2 * 10 + d1;
-        const possibleMoves = [];
-
-        if (game.board[move1] === null || game.board[move1] !== playerIndex) possibleMoves.push(move1);
-        if (move1 !== move2 && (game.board[move2] === null || game.board[move2] !== playerIndex)) possibleMoves.push(move2);
+        const possibleMoves = getPossibleMoves(game, d1, d2);
 
         io.to(roomId).emit('diceRolled', {
             dice: game.diceValues,
@@ -90,6 +129,7 @@ io.on('connection', (socket) => {
         });
     });
 
+    // Ход
     socket.on('makeMove', (cellKey) => {
         const roomId = socket.roomId;
         const game = games[roomId];
@@ -99,37 +139,45 @@ io.on('connection', (socket) => {
         if (playerIndex !== game.currentPlayerIndex) return;
         if (!game.diceValues) return;
 
-        const d1 = game.diceValues.dice1;
-        const d2 = game.diceValues.dice2;
-        const move1 = d1 * 10 + d2;
-        const move2 = d2 * 10 + d1;
-        const possibleMoves = [];
-        if (game.board[move1] === null || game.board[move1] !== playerIndex) possibleMoves.push(move1);
-        if (move1 !== move2 && (game.board[move2] === null || game.board[move2] !== playerIndex)) possibleMoves.push(move2);
-
+        const possibleMoves = getPossibleMoves(game, game.diceValues.dice1, game.diceValues.dice2);
         if (!possibleMoves.includes(cellKey)) return;
 
         const currentOccupant = game.board[cellKey];
+        let wasKick = false;
 
         if (currentOccupant === null) {
+            // Пустая клетка
             game.board[cellKey] = playerIndex;
+
             if (checkWin(game, playerIndex)) {
                 game.gameOver = true;
+                // Записываем победу
+                const winnerId = game.players[playerIndex].id;
+                if (leaderboard[winnerId]) {
+                    leaderboard[winnerId].wins++;
+                }
                 io.to(roomId).emit('gameOver', {
                     winner: game.players[playerIndex],
                     board: game.board
                 });
+                io.emit('leaderboardUpdate', getLeaderboardData());
                 return;
             }
         } else if (currentOccupant !== playerIndex) {
+            // Чужая клетка — сбиваем, клетка становится пустой
             game.board[cellKey] = null;
+            wasKick = true;
         } else {
-            return;
+            return; // своя клетка — ничего не делаем
         }
 
-        if (game.diceValues.isDouble && currentOccupant === null) {
+        // Переход хода
+        // ИСПРАВЛЕНИЕ: дубль всегда даёт дополнительный ход, даже при снятии чужой фишки
+        if (game.diceValues && game.diceValues.isDouble) {
+            // Дубль — игрок ходит ещё раз (бросает заново)
             game.diceValues = null;
         } else {
+            // Обычный переход
             game.currentPlayerIndex = (game.currentPlayerIndex + 1) % game.players.length;
             game.diceValues = null;
         }
@@ -137,23 +185,75 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('gameStateUpdate', {
             board: game.board,
             currentPlayerIndex: game.currentPlayerIndex,
-            diceValues: null
+            diceValues: null,
+            lastAction: wasKick ? 'kick' : 'move'
         });
     });
 
+    // Выход в лобби (после игры)
+    socket.on('returnToLobby', () => {
+        const roomId = socket.roomId;
+        const game = games[roomId];
+        if (!game) return;
+
+        // Возвращаем всех игроков в лобби
+        game.players.forEach(p => {
+            const s = io.sockets.sockets.get(p.id);
+            if (s) {
+                s.leave(roomId);
+                s.roomId = null;
+                // Если игрок ещё не в лобби — добавляем
+                if (!playersInLobby.find(lp => lp.id === p.id)) {
+                    playersInLobby.push({ id: p.id, nickname: p.nickname || leaderboard[p.id]?.nickname || 'Игрок' });
+                }
+            }
+        });
+
+        delete games[roomId];
+
+        io.emit('lobbyUpdate', playersInLobby);
+        io.emit('leaderboardUpdate', getLeaderboardData());
+
+        // Отправляем команду вернуться в лобби
+        game.players.forEach(p => {
+            const s = io.sockets.sockets.get(p.id);
+            if (s) {
+                s.emit('goToLobby');
+            }
+        });
+    });
+
+    // Отключение
     socket.on('disconnect', () => {
+        // Удаляем из лобби
         const lobbyIndex = playersInLobby.findIndex(p => p.id === socket.id);
         if (lobbyIndex !== -1) {
             playersInLobby.splice(lobbyIndex, 1);
             io.emit('lobbyUpdate', playersInLobby);
         }
+
+        // Уведомляем игру, если игрок был в ней
         if (socket.roomId && games[socket.roomId]) {
             io.to(socket.roomId).emit('playerDisconnected', {
                 nickname: socket.nickname || 'Игрок'
             });
         }
+
+        console.log('Игрок отключился:', socket.nickname || socket.id);
     });
 });
+
+// Вспомогательные функции
+function getPossibleMoves(game, d1, d2) {
+    const move1 = d1 * 10 + d2;
+    const move2 = d2 * 10 + d1;
+    const moves = [];
+    const playerIndex = game.currentPlayerIndex;
+
+    if (game.board[move1] === null || game.board[move1] !== playerIndex) moves.push(move1);
+    if (move1 !== move2 && (game.board[move2] === null || game.board[move2] !== playerIndex)) moves.push(move2);
+    return moves;
+}
 
 function checkWin(game, playerIndex) {
     const grid = [];
@@ -174,6 +274,13 @@ function checkWin(game, playerIndex) {
         }
     }
     return false;
+}
+
+function getLeaderboardData() {
+    const data = Object.values(leaderboard)
+        .filter(entry => playersInLobby.some(p => p.id === entry.id) || entry.wins > 0)
+        .sort((a, b) => b.wins - a.wins);
+    return data;
 }
 
 const PORT = process.env.PORT || 3000;
