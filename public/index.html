@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Кости 6x6 — Онлайн</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>🎲 Кости и Линии</h1>
+
+    <div id="lobbyScreen">
+        <h2>Лобби</h2>
+        <div>
+            <input type="text" id="nicknameInput" placeholder="Введи ник" maxlength="12">
+            <button id="joinButton">Войти в лобби</button>
+        </div>
+        <h3>Игроки в лобби:</h3>
+        <ul id="lobbyList"></ul>
+        <button id="startGameButton" style="display:none;">🚀 Начать игру</button>
+        <p id="lobbyMessage"></p>
+    </div>
+
+    <div id="gameScreen" style="display:none;">
+        <div id="playersPanel"></div>
+        <div class="dice-area">
+            <div class="dice" id="dice1">?</div>
+            <div class="dice" id="dice2">?</div>
+            <button id="rollButton">Бросить кубики</button>
+        </div>
+        <div id="message"></div>
+        <div id="board" class="board"></div>
+        <button id="leaveButton">Выйти из игры</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+</html>
